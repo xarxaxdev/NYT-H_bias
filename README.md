@@ -1,7 +1,9 @@
 # NYT-H_bias
 
+```
+head -n 99999 generated_models/*/metrics.csv > all.csv
 
-
+````
 
 
 
@@ -9,6 +11,9 @@
 
 ### Data Example
 ```python
+
+# We want to predict relation
+# Using sentence + word1 + type1 + word2 + type2
 {
     "instance_id": "NONNADEV#193662",
     "bag_id": "NONNADEV#91512",
