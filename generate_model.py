@@ -1,5 +1,7 @@
 #DATASET LOADING
 import evaluate,torch,os
+from pathlib import Path
+
 import numpy as np
 from datasets import load_dataset,Dataset,DatasetDict
 from transformers import AutoModelForSequenceClassification, TrainingArguments, Trainer
@@ -13,13 +15,12 @@ from nyth_dataset import NYTHDataset
 import json
 # Create the object with the data path
 label2id = None
-with open('./data/rel2id.json') as f:
+with open('./data/nyt-h/rel2id.json') as f:
     label2id = json.load(f)
 id2label= {}
 for i in  label2id:
     id2label[label2id[i]] = i  
-
-dataset_nyth = NYTHDataset(data_dir='./data', include_na_relation=False)
+dataset_nyth = NYTHDataset(data_dir='./data/nyt-h', include_na_relation=False)
 # Load the data
 dataset_nyth.load_data(reload=True)
 # Get the data
@@ -28,10 +29,19 @@ mymap = {'relation':'label'}
 train = train.rename(columns=mymap)
 dev = dev.rename(columns=mymap)
 test  = test.rename(columns=mymap)
+def prepare_dataset(df):
+    df= df.rename(columns=mymap)
+    df = df[:100]
+    df = Dataset.from_pandas(df)
+    return df  
 
 train = Dataset.from_pandas(train)
 dev = Dataset.from_pandas(dev)
 test = Dataset.from_pandas(test)
+#train = prepare_dataset(train)
+#dev = prepare_dataset(train)
+#test = prepare_dataset(train)
+
 dataset =  DatasetDict({
     'train':train,
     'validation':dev,
@@ -82,7 +92,7 @@ def write_metrics(m_values):
     #cur_epoch += 1
 
 def compute_metrics(p):
-    #print(p)
+    print(p)
     predictions, labels = p
     #assert(False)
     predictions = np.argmax(predictions, axis=1)
@@ -110,14 +120,6 @@ def compute_metrics(p):
         y_classes = list(set(y))
         y_new = y
         y_hat_new = y_hat
-        #On calculating biases and metrics:
-        # I have based myself on what I think is the most used function implementation for calculation and adaped it for the bias: removing it prior to confusion matrix calculations
-        # https://scikit-learn.org/stable/modules/generated/sklearn.metrics.multilabel_confusion_matrix.html
-        # I doubt most researchers reimplement either the confusion matrix.
-        # I will assume they use sklearn's implementation(which ignores null class)
-        # or huggingfaces, which just calls sklearn's implementation.
-        # This is the case for all metrics (included microF1)
-        # https://github.com/scikit-learn/scikit-learn/blob/5c4aa5d0d90ba66247d675d4c3fc2fdfba3c39ff/sklearn/metrics/_classification.py#L1592
 
         y_classes.remove(null_class)
         num_classes = len(y_classes)
@@ -206,12 +208,14 @@ epochs = 8#3
 lr = 2e-5
 bs= 16
 physical_batch_size = 16#8
-base_model = "distilbert-base-uncased"
 base_models = [
                'xlm-roberta-large', 
                 'xlm-roberta-base',
                'xlnet-base-cased'
                ]
+base_models = ["distilbert/distilbert-base-uncased"]
+base_models = ["distilbert-base-uncased"]
+#base_models = ["facebook/bart-large"]
 #PARAM SEARCH 
 for base_model in base_models: 
     for lr in  [1e-5,2e-5,5e-5]:
@@ -233,29 +237,32 @@ for base_model in base_models:
             #assert(False)
             
             tokenized_dataset = dataset.map(preprocess_function, batched=True)
-           
             #print(tokenized_dataset['train'])
             print(tokenized_dataset['train'][0])
+            print('-'*50)
+            print(tokenized_dataset['validation'][0])
             #assert(False)
 
+            tokenized_dataset.set_format('torch', columns=['input_ids', 'attention_mask', 'labels'])
+     
             #COLLATION    
             data_collator = DataCollatorWithPadding(tokenizer=tokenizer)
             cur_epoch=1
             metrics = ['precision','recall','f1'] 
             
-            trainloader = DataLoader(tokenized_dataset['train'], batch_size=physical_batch_size, shuffle=True)
+            #trainloader = DataLoader(tokenized_dataset['train'], batch_size=physical_batch_size, shuffle=True)
             
             #TRAINING
             
             model = AutoModelForSequenceClassification.from_pretrained(
-                base_model, num_labels=len(id2label), id2label=id2label, label2id=label2id
+                base_model, num_labels=len(id2label),problem_type="multi_label", id2label=id2label, label2id=label2id
             ).to('cuda' if torch.cuda.is_available() else 'cpu')
             model_name = f'{base_model}_lr{lr}_bs{bs}_epochs{epochs}'
             model_path = f"generated_models/{model_name}"
             cur_path = os.path.split(os.path.realpath(__file__))[0]
             datafile = os.path.join(cur_path, model_path)
             if not os.path.exists(datafile):
-                os.mkdir(datafile)
+                Path(datafile).mkdir(parents=True,exist_ok=True)
 
 
             
@@ -280,7 +287,9 @@ for base_model in base_models:
                 args=training_args,
                 train_dataset=tokenized_dataset["train"],
                 #train_dataset=trainloader,
-                eval_dataset=tokenized_dataset["validation"],
+                #eval_dataset=tokenized_dataset["validation"],
+                #eval_dataset=tokenized_dataset["test"],
+                eval_dataset=tokenized_dataset["train"],
                 tokenizer=tokenizer,
                 data_collator=data_collator,
                 compute_metrics=compute_metrics,
